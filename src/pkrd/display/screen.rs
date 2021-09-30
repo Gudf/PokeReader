@@ -58,17 +58,18 @@ pub trait Screen {
     /// # Safety
     /// The caller needs to make sure:
     /// - The x is never above 320 for a bottom screen
-    /// - The x is never above 340 for a top screen
+    /// - The x is never above 400 for a top screen
     /// - The y is never above 240
     unsafe fn draw_pixel(&mut self, color: &Color, x: u32, y: u32) -> CtrResult<()> {
+
         let context = self.get_context();
-        let format = context.format;
         let addr = context.addr;
         let stride = context.stride;
+        let format = context.format;
 
         if (format & 0xf) == 2 {
-            let pixel = ((color.r as u32) << 11) | ((color.g as u32) << 5) | (color.b as u32);
-            let vram = (addr + (stride * x) + 480 - (2 * y)) as *mut u32;
+            let pixel = ((color.r as u16 >> 3) << 11) | ((color.g as u16 >> 2) << 5) | (color.b as u16 >> 3);
+            let vram = (addr + (stride * x) + 480 - (2 * y)) as *mut u16;
             vram.write(pixel);
         } else {
             let bytes: [u8; 3] = [color.b, color.g, color.r];
@@ -164,6 +165,50 @@ pub trait Screen {
             for current_y in y..y_max {
                 // This is safe because the pixels are validated ahead of time
                 unsafe { self.draw_pixel(color, current_x, current_y) }?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn darken_square(
+        &mut self,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        alpha: u8,
+    ) -> CtrResult<()> {
+
+        let context = self.get_context();
+        let addr = context.addr;
+        let stride = context.stride;
+        let format = context.format;
+
+        let x_max = x + width;
+        let y_max = y + height;
+
+        if !self.is_safe_pixel_range(x, y, x_max, y_max) {
+            return Err(GenericResultCode::InvalidValue.into());
+        }
+
+        // This is safe because the pixels are validated ahead of time
+        unsafe {
+            for current_x in x..x_max {
+                for current_y in y..y_max {
+                    if (format & 0xf) == 2 {
+                        let vram = (addr + (stride * current_x) + 480 - (2 * current_y)) as *mut u16;
+                        vram.write(0);
+                    } else {
+                        let vram = (addr + (stride * current_x) + 720 - (3 * current_y)) as *mut u8;
+                        let b = vram.read();
+                        vram.write(((b as u16 * alpha as u16) / 255) as u8);
+                        let g = vram.add(1).read();
+                        vram.add(1).write(((g as u16 * alpha as u16) / 255) as u8);
+                        let r = vram.add(2).read();
+                        vram.add(2).write(((r as u16 * alpha as u16) / 255) as u8);
+                    }
+                }
             }
         }
 
